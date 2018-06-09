@@ -1,66 +1,74 @@
-import scala.util.parsing.combinator._
+import utils.{Command, PollParams, QuestionTypes, QuestionParams}
+import utils.CommandTypes._
+
 import scala.collection.immutable.Map
 
 
-class CommandsParser extends SimpleParser {
-  private object Commands {
-    def addPoll(map: Map[Int, Poll], poll:Poll): (Map[Int, Poll], String) =
-      (map + (poll.id -> poll), s"Poll '${poll.name}' created. Id is ${poll.id}")
+object CommandsParser extends SimpleParsers {
 
-    def list(map: Map[Int, Poll]): (Map[Int, Poll], String) = {
-      val result = map.map(data => s"id: ${data._2.id}; name: ${data._2.name}").mkString("\n")
-      (map, result)
+  private def createPollParser(): Parser[Command] =
+    ("/" ~> "create_poll" ~ word ~ anonymity.? ~ visibility.? ~ date.? ~ date.?) ^^ {
+      case _ ~ name ~ an ~ v ~ start ~ end => Command(CreatePoll, pollParams = Some(PollParams(name, an, v, start, end)))
     }
 
-    def deletePoll(map: Map[Int, Poll], id: Int): (Map[Int, Poll], String) =
-      (map - id, s"Poll $id was deleted")
-
-    def startPoll(map: Map[Int, Poll], id: Int): (Map[Int, Poll], String) = {
-      map.get(id) match {
-        case Some(p) => (map, p.startPoll)
-        case None => (map, "Poll is undefined")
+  private def commandsWithIdParser(): Parser[Command] =
+    "/" ~> commandsWithId ~ number ^^ {
+      case cmd ~ pollID => cmd match {
+        case "start_poll" => Command(StartPoll, Option(pollID))
+        case "stop_poll" => Command(StopPoll, Option(pollID))
+        case "delete_poll" => Command(DeletePoll, Option(pollID))
+        case "result" => Command(Result, pollID = Option(pollID))
       }
     }
 
-    def stopPoll(map: Map[Int, Poll], id: Int): (Map[Int, Poll], String) = {
-      map.get(id) match  {
-        case Some(p) => (map - id, p.stopPoll)
-        case None => (map, "Poll is undefined")
-      }
+  private def commandsWithoutIdParser(): Parser[Command] =
+    "/" ~> commandWithoutId ^^ {
+      case "list" => Command(List_)
     }
 
-    def result(map: Map[Int, Poll], id: Int): (Map[Int, Poll], String) = {
-      map.get(id) match  {
-        case Some(p) => (map, p.getResult)
-        case None => (map, "Poll is undefined")
-      }
+  private def commandsWithoutContextParser() =
+    commandsWithIdParser() | commandsWithoutIdParser() | createPollParser()
+
+  private def beginParser(): Parser[Command] =
+    "/begin" ~> number ^^ (pollID => Command(Begin, Option(pollID)))
+
+  private def contextCommandsParser(): Parser[Command] =
+    "/" ~> contextWithoutIdParser ^^ {
+      case "end" => Command(End)
+      case "view" => Command(View)
     }
-  }
 
-  private def createPollParser(map: Map[Int, Poll]): Parser[(Map[Int, Poll], String)] =
-    ( "/" ~> "create_poll" ~ word ~ anonymity.? ~ visibility.? ~ date.? ~ date.?) ^^
-      { case _ ~ name ~ an ~ v ~ start ~ end => Commands.addPoll(map, Poll(NaturalNumbers.getNextId, name, an, v, start, end))}
+  private def deleteQParser(): Parser[Command] =
+    "/delete_question" ~> number ^^ (questionID => Command(DeleteQuestion, questionID = Option(questionID)))
 
+  private def optionsQuestionParser(): Parser[Command] =
+    "/add_question" ~> questionArgumentParser ~ questionTypeParser ~ optionsParser ^^ {
+      case question ~ qType ~ options =>
+        Command(AddQuestion, questionParams = Option(QuestionParams(question, qType, options)))
+    }
 
-  private def commandsWithIdParser(map: Map[Int, Poll]): Parser[(Map[Int, Poll], String)] = "/" ~> commandsWithId ~ number ^^
-    {case cmd ~ id => cmd match {
-      case "start_poll" => Commands.startPoll(map, id)
-      case "stop_poll" => Commands.stopPoll(map, id)
-      case "delete_poll" => Commands.deletePoll(map, id)
-      case "result" => Commands.result(map, id)
-    }}
+  private def openQuestionParser(): Parser[Command] =
+    "/add_question" ~> questionArgumentParser ~ questionTypeParser.? ^^ {
+      case question ~ qType =>
+        Command(AddQuestion, questionParams = Option(QuestionParams(question, qType.getOrElse(QuestionTypes.Open), List.empty)))
+    }
 
-  private def commandsWithoutIdParser(map: Map[Int, Poll]): Parser[(Map[Int, Poll], String)] = "/" ~> commandWithoutId ^^ {
-    case "list" => Commands.list(map)
-  }
+  private def answerToQuestionParser(): Parser[Command] =
+    "/answer" ~> number ~ "(?s).+".r ^^ {
+      case questionID ~ qAnswer => Command(Answer, questionID = Option(questionID), answer = Option(qAnswer))
+    }
 
-  private def fullParser(map: Map[Int, Poll]): Parser[(Map[Int, Poll], String)] =
-    commandsWithIdParser(map) | commandsWithoutIdParser(map) | createPollParser(map)
+  private def commandsWithContextParser() =
+    beginParser() | contextCommandsParser() | optionsQuestionParser() |
+      openQuestionParser() | deleteQParser() | answerToQuestionParser()
 
-  def parseCmd(map: Map[Int, Poll], cmd: String): (Map[Int, Poll], String) = {
-    parse(fullParser(map), cmd) match {
-            case Success(matched,_) => matched
-            case _ => (map, "Can't recognize command!")
+  private def fullParser(): Parser[Command] =
+    commandsWithoutContextParser() | commandsWithContextParser()
+
+  def parseCmd(cmd: String): Option[Command] = {
+    parse(fullParser(), cmd) match {
+      case Success(matched, _) => Option(matched)
+      case _ => None
     }
   }
 

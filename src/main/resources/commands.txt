@@ -1,6 +1,10 @@
 /create_poll hehehe
 /create_poll (the best name ever) yes afterstop 04:00:00 18:03:18
 /list
-/start_poll 1
 /delete_poll 2
-/list
+/begin 1
+/add_question (hello?) (Multi)\n(Var1)\n(var2)
+/add_question (hello?) (Open)
+/start_poll 1
+/answer 2 (hello kek)
+/view
